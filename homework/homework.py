@@ -95,3 +95,187 @@
 # {'type': 'cm_matrix', 'dataset': 'train', 'true_0': {"predicted_0": 15562, "predicte_1": 666}, 'true_1': {"predicted_0": 3333, "predicted_1": 1444}}
 # {'type': 'cm_matrix', 'dataset': 'test', 'true_0': {"predicted_0": 15562, "predicte_1": 650}, 'true_1': {"predicted_0": 2490, "predicted_1": 1420}}
 #
+
+
+# flake8: noqa: E501
+
+import os
+import json
+import gzip
+import pickle
+import pandas as pd
+
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.pipeline import Pipeline
+from sklearn.svm import SVC
+from sklearn.model_selection import GridSearchCV
+
+from sklearn.metrics import (
+    precision_score,
+    balanced_accuracy_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+)
+
+# Rutas
+
+TRAIN_PATH = "files/input/train_data.csv.zip"
+TEST_PATH = "files/input/test_data.csv.zip"
+MODEL_PATH = "files/models/model.pkl.gz"
+METRICS_PATH = "files/output/metrics.json"
+
+
+# PASO 1: Limpieza de datos
+
+def load_data():
+    train = pd.read_csv(TRAIN_PATH)
+    test = pd.read_csv(TEST_PATH)
+    return train, test
+
+def clean_data(df):
+    df = df.copy()
+    df.rename(columns={"default payment next month": "default"}, inplace=True)
+    df.drop(columns=["ID"], inplace=True)
+
+    df = df[df["MARRIAGE"] != 0]
+    df = df[df["EDUCATION"] != 0]
+
+    df["EDUCATION"] = df["EDUCATION"].apply(lambda x: 4 if x > 4 else x)
+
+    df.dropna(inplace=True)
+    return df
+
+# PASO 2: Separar X_train, y_train, X_test, y_test 
+
+def split_X_y(df):
+    return df.drop(columns=["default"]), df["default"]
+
+
+
+# PASO 3: Pipeline
+
+def split_X_y(df):
+    return df.drop(columns=["default"]), df["default"]
+
+
+# PASO 3: Construcción del pipeline
+def build_pipeline(x_train):
+
+    categorical_features = ["SEX", "EDUCATION", "MARRIAGE"]
+    numerical_features = list(set(x_train.columns) - set(categorical_features))
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_features),
+            ("scaler", StandardScaler(), numerical_features),
+        ],
+        remainder="passthrough"
+    )
+
+    pipeline = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("pca", PCA()),
+            ("feature_selection", SelectKBest(score_func=f_classif)),
+            ("classifier", SVC(kernel="rbf", random_state=12345, max_iter=-1))
+        ]
+    )
+
+    return pipeline
+
+
+# PASO 4: GRIDSEARCHCV
+
+def optimize_hyperparameters(pipeline, x_train, y_train):
+
+    param_grid = {
+        "pca__n_components": [20, x_train.shape[1] - 2],
+        "feature_selection__k": [12],
+        "classifier__kernel": ["rbf"],
+        "classifier__gamma": [0.1],
+    }
+
+    grid = GridSearchCV(
+        pipeline,
+        param_grid,
+        cv=10,
+        scoring="balanced_accuracy",
+    )
+
+    grid.fit(x_train, y_train)
+    return grid
+
+
+#  PASO 5: Guardar modelo
+
+def save_model(model):
+    os.makedirs("files/models", exist_ok=True)
+    with gzip.open(MODEL_PATH, "wb") as f:
+        pickle.dump(model, f)
+
+
+# PASO 6: Métricas
+
+def compute_metrics(dataset_name, y_true, y_pred):
+
+    return {
+        "type": "metrics",
+        "dataset": dataset_name,
+        "precision": precision_score(y_true, y_pred, zero_division=0),
+        "balanced_accuracy": balanced_accuracy_score(y_true, y_pred),
+        "recall": recall_score(y_true, y_pred, zero_division=0),
+        "f1_score": f1_score(y_true, y_pred, zero_division=0),
+    }
+
+
+# PASO 7: Matriz de confusión
+
+def compute_confusion(dataset_name, y_true, y_pred):
+    cm = confusion_matrix(y_true, y_pred)
+    return {
+        "type": "cm_matrix",
+        "dataset": dataset_name,
+        "true_0": {"predicted_0": int(cm[0, 0]), "predicted_1": int(cm[0, 1])},
+        "true_1": {"predicted_0": int(cm[1, 0]), "predicted_1": int(cm[1, 1])},
+    }
+
+# Ejecución del proceso
+
+def main():
+
+    train_df, test_df = load_data()
+    train_df = clean_data(train_df)
+    test_df = clean_data(test_df)
+
+    X_train, y_train = split_X_y(train_df)
+    X_test, y_test = split_X_y(test_df)
+
+    pipeline = build_pipeline(X_train)
+    model = optimize_hyperparameters(pipeline, X_train, y_train)
+
+    save_model(model)
+
+    y_train_pred = model.predict(X_train)
+    y_test_pred = model.predict(X_test)
+
+    train_metrics = compute_metrics("train", y_train, y_train_pred)
+    test_metrics = compute_metrics("test", y_test, y_test_pred)
+
+    train_cm = compute_confusion("train", y_train, y_train_pred)
+    test_cm = compute_confusion("test", y_test, y_test_pred)
+
+    os.makedirs("files/output", exist_ok=True)
+
+    with open(METRICS_PATH, "w", encoding="utf-8") as f:
+        f.write(json.dumps(train_metrics) + "\n")
+        f.write(json.dumps(test_metrics) + "\n")
+        f.write(json.dumps(train_cm) + "\n")
+        f.write(json.dumps(test_cm) + "\n")
+
+
+if __name__ == "__main__":
+    main()
