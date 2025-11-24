@@ -158,11 +158,6 @@ def split_X_y(df):
 
 # PASO 3: Pipeline
 
-def split_X_y(df):
-    return df.drop(columns=["default"]), df["default"]
-
-
-# PASO 3: Construcción del pipeline
 def build_pipeline(x_train):
 
     categorical_features = ["SEX", "EDUCATION", "MARRIAGE"]
